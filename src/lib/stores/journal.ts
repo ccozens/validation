@@ -46,14 +46,42 @@ export const entries = writable<JournalEntry[]>([]);
 export const daySummaries = writable<DaySummary[]>([]);
 export const weekSummaries = writable<WeekSummary[]>([]);
 export const journalLoading = writable(true);
+export const journalError = writable<string | null>(null);
 export const summaryLoading = writable(false);
 
 let unsubEntries: (() => void) | null = null;
 let unsubDaySummaries: (() => void) | null = null;
 let unsubWeekSummaries: (() => void) | null = null;
+let activeUserId: string | null = null;
+let journalInitTimeout: ReturnType<typeof setTimeout> | null = null;
+let initialLoadSettled = false;
 
 export function initJournal(user: User) {
+  if (activeUserId === user.uid && (unsubEntries || unsubDaySummaries || unsubWeekSummaries)) {
+    return;
+  }
+
+  teardownJournal();
+  activeUserId = user.uid;
   journalLoading.set(true);
+  journalError.set(null);
+  initialLoadSettled = false;
+
+  const settleInitialLoad = () => {
+    if (initialLoadSettled) return;
+    initialLoadSettled = true;
+    if (journalInitTimeout) {
+      clearTimeout(journalInitTimeout);
+      journalInitTimeout = null;
+    }
+    journalLoading.set(false);
+  };
+
+  // Safety net: avoid indefinite spinner if listeners never resolve.
+  journalInitTimeout = setTimeout(() => {
+    journalError.set('Could not load journal data. Check Firestore rules/indexes and refresh.');
+    settleInitialLoad();
+  }, 8000);
 
   const entriesRef = collection(db, 'users', user.uid, 'entries');
   const daySummariesRef = collection(db, 'users', user.uid, 'daySummaries');
@@ -69,17 +97,25 @@ export function initJournal(user: User) {
     orderBy('createdAt', 'asc')
   );
 
-  unsubEntries = onSnapshot(entriesQuery, (snap) => {
-    entries.set(
-      snap.docs.map((d) => ({
-        id: d.id,
-        text: d.data().text,
-        createdAt: (d.data().createdAt as Timestamp)?.toDate() ?? new Date(),
-        type: 'entry',
-      }))
-    );
-    journalLoading.set(false);
-  });
+  unsubEntries = onSnapshot(
+    entriesQuery,
+    (snap) => {
+      entries.set(
+        snap.docs.map((d) => ({
+          id: d.id,
+          text: d.data().text,
+          createdAt: (d.data().createdAt as Timestamp)?.toDate() ?? new Date(),
+          type: 'entry',
+        }))
+      );
+      settleInitialLoad();
+    },
+    () => {
+      entries.set([]);
+      journalError.set('Could not load entries. Check Firestore permissions.');
+      settleInitialLoad();
+    }
+  );
 
   unsubDaySummaries = onSnapshot(
     query(daySummariesRef, orderBy('date', 'asc')),
@@ -93,6 +129,10 @@ export function initJournal(user: User) {
           type: 'day-summary',
         }))
       );
+    },
+    () => {
+      daySummaries.set([]);
+      journalError.set('Could not load day summaries. Check Firestore permissions.');
     }
   );
 
@@ -109,17 +149,32 @@ export function initJournal(user: User) {
           type: 'week-summary',
         }))
       );
+    },
+    () => {
+      weekSummaries.set([]);
+      journalError.set('Could not load week summaries. Check Firestore permissions.');
     }
   );
 }
 
 export function teardownJournal() {
+  if (journalInitTimeout) {
+    clearTimeout(journalInitTimeout);
+    journalInitTimeout = null;
+  }
+  initialLoadSettled = false;
+  activeUserId = null;
   unsubEntries?.();
   unsubDaySummaries?.();
   unsubWeekSummaries?.();
+  unsubEntries = null;
+  unsubDaySummaries = null;
+  unsubWeekSummaries = null;
   entries.set([]);
   daySummaries.set([]);
   weekSummaries.set([]);
+  journalLoading.set(false);
+  journalError.set(null);
 }
 
 export async function addEntry(user: User, text: string) {

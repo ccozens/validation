@@ -5,6 +5,7 @@
     daySummaries,
     weekSummaries,
     journalLoading,
+    journalError,
     summaryLoading,
     addEntry,
     saveDaySummary,
@@ -223,6 +224,8 @@
         <!-- Today's entries -->
         {#if $journalLoading}
           <p class="font-sans text-sm text-stone-400 text-center py-4 animate-pulse">Loading…</p>
+        {:else if $journalError}
+          <p class="font-sans text-sm text-red-500 bg-red-50 rounded-xl px-4 py-3">{$journalError}</p>
         {:else if todayEntries.length > 0}
           <div class="space-y-2">
             {#each todayEntries as entry (entry.id)}
@@ -287,6 +290,8 @@
         <!-- History view -->
         {#if $journalLoading}
           <p class="font-sans text-sm text-stone-400 text-center py-8 animate-pulse">Loading…</p>
+        {:else if $journalError}
+          <p class="font-sans text-sm text-red-500 bg-red-50 rounded-xl px-4 py-3">{$journalError}</p>
         {:else if groupedDays.size === 0}
           <div class="text-center py-10">
             <p class="text-stone-400 font-sans text-sm">No entries yet.</p>
