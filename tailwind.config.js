@@ -36,10 +36,10 @@ export default {
         warm: {
           50: '#fdf8f0',
           100: '#faefd8',
-          200: '#f4dcac',
+          200: '#f0d9a8',
           300: '#ecc475',
           400: '#e4a84a',
-          500: '#dc8f2d',
+          500: '#b87333',
         }
       },
       animation: {

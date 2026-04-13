@@ -1,5 +1,5 @@
 // src/lib/stores/journal.ts
-import { writable, get } from 'svelte/store';
+import { writable } from 'svelte/store';
 import { db } from '$lib/firebase';
 import {
   collection,
@@ -11,7 +11,6 @@ import {
   Timestamp,
   doc,
   setDoc,
-  getDocs,
   where
 } from 'firebase/firestore';
 import type { User } from 'firebase/auth';
@@ -46,42 +45,14 @@ export const entries = writable<JournalEntry[]>([]);
 export const daySummaries = writable<DaySummary[]>([]);
 export const weekSummaries = writable<WeekSummary[]>([]);
 export const journalLoading = writable(true);
-export const journalError = writable<string | null>(null);
 export const summaryLoading = writable(false);
 
 let unsubEntries: (() => void) | null = null;
 let unsubDaySummaries: (() => void) | null = null;
 let unsubWeekSummaries: (() => void) | null = null;
-let activeUserId: string | null = null;
-let journalInitTimeout: ReturnType<typeof setTimeout> | null = null;
-let initialLoadSettled = false;
 
 export function initJournal(user: User) {
-  if (activeUserId === user.uid && (unsubEntries || unsubDaySummaries || unsubWeekSummaries)) {
-    return;
-  }
-
-  teardownJournal();
-  activeUserId = user.uid;
   journalLoading.set(true);
-  journalError.set(null);
-  initialLoadSettled = false;
-
-  const settleInitialLoad = () => {
-    if (initialLoadSettled) return;
-    initialLoadSettled = true;
-    if (journalInitTimeout) {
-      clearTimeout(journalInitTimeout);
-      journalInitTimeout = null;
-    }
-    journalLoading.set(false);
-  };
-
-  // Safety net: avoid indefinite spinner if listeners never resolve.
-  journalInitTimeout = setTimeout(() => {
-    journalError.set('Could not load journal data. Check Firestore rules/indexes and refresh.');
-    settleInitialLoad();
-  }, 8000);
 
   const entriesRef = collection(db, 'users', user.uid, 'entries');
   const daySummariesRef = collection(db, 'users', user.uid, 'daySummaries');
@@ -94,28 +65,20 @@ export function initJournal(user: User) {
   const entriesQuery = query(
     entriesRef,
     where('createdAt', '>=', Timestamp.fromDate(sixtyDaysAgo)),
-    orderBy('createdAt', 'asc')
+    orderBy('createdAt', 'desc')
   );
 
-  unsubEntries = onSnapshot(
-    entriesQuery,
-    (snap) => {
-      entries.set(
-        snap.docs.map((d) => ({
-          id: d.id,
-          text: d.data().text,
-          createdAt: (d.data().createdAt as Timestamp)?.toDate() ?? new Date(),
-          type: 'entry',
-        }))
-      );
-      settleInitialLoad();
-    },
-    () => {
-      entries.set([]);
-      journalError.set('Could not load entries. Check Firestore permissions.');
-      settleInitialLoad();
-    }
-  );
+  unsubEntries = onSnapshot(entriesQuery, (snap) => {
+    entries.set(
+      snap.docs.map((d) => ({
+        id: d.id,
+        text: d.data().text,
+        createdAt: (d.data().createdAt as Timestamp)?.toDate() ?? new Date(),
+        type: 'entry',
+      }))
+    );
+    journalLoading.set(false);
+  });
 
   unsubDaySummaries = onSnapshot(
     query(daySummariesRef, orderBy('date', 'asc')),
@@ -129,10 +92,6 @@ export function initJournal(user: User) {
           type: 'day-summary',
         }))
       );
-    },
-    () => {
-      daySummaries.set([]);
-      journalError.set('Could not load day summaries. Check Firestore permissions.');
     }
   );
 
@@ -149,32 +108,17 @@ export function initJournal(user: User) {
           type: 'week-summary',
         }))
       );
-    },
-    () => {
-      weekSummaries.set([]);
-      journalError.set('Could not load week summaries. Check Firestore permissions.');
     }
   );
 }
 
 export function teardownJournal() {
-  if (journalInitTimeout) {
-    clearTimeout(journalInitTimeout);
-    journalInitTimeout = null;
-  }
-  initialLoadSettled = false;
-  activeUserId = null;
   unsubEntries?.();
   unsubDaySummaries?.();
   unsubWeekSummaries?.();
-  unsubEntries = null;
-  unsubDaySummaries = null;
-  unsubWeekSummaries = null;
   entries.set([]);
   daySummaries.set([]);
   weekSummaries.set([]);
-  journalLoading.set(false);
-  journalError.set(null);
 }
 
 export async function addEntry(user: User, text: string) {
@@ -209,37 +153,6 @@ export async function saveWeekSummary(
   });
 }
 
-// Get entries for a specific YYYY-MM-DD date string
-export function getEntriesForDate(allEntries: JournalEntry[], dateStr: string): JournalEntry[] {
-  return allEntries.filter((e) => toDateStr(e.createdAt) === dateStr);
-}
-
-// Get entries for current Mon–Sun week
-export function getEntriesForCurrentWeek(allEntries: JournalEntry[]): JournalEntry[] {
-  const { start, end } = getCurrentWeekRange();
-  return allEntries.filter((e) => e.createdAt >= start && e.createdAt <= end);
-}
-
-export function getCurrentWeekRange(): { start: Date; end: Date; startStr: string; endStr: string } {
-  const now = new Date();
-  const day = now.getDay(); // 0=Sun
-  const diffToMonday = (day === 0 ? -6 : 1 - day);
-  const monday = new Date(now);
-  monday.setDate(now.getDate() + diffToMonday);
-  monday.setHours(0, 0, 0, 0);
-
-  const sunday = new Date(monday);
-  sunday.setDate(monday.getDate() + 6);
-  sunday.setHours(23, 59, 59, 999);
-
-  return {
-    start: monday,
-    end: sunday,
-    startStr: toDateStr(monday),
-    endStr: toDateStr(sunday),
-  };
-}
-
 export function toDateStr(date: Date): string {
   return date.toISOString().slice(0, 10);
 }
@@ -253,24 +166,63 @@ export function formatTime(date: Date): string {
   return date.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
 }
 
-// Group entries by date for display
+/**
+ * Returns entries since the last week summary was generated (or all entries
+ * if no summary exists yet). Also returns whether there's enough material
+ * to warrant a new summary (entries spanning at least 5 distinct days).
+ */
+export function getEntriesSinceLastSummary(
+  allEntries: JournalEntry[],
+  allWeekSummaries: WeekSummary[]
+): { entries: JournalEntry[]; sinceDate: string | null; hasEnough: boolean } {
+  let sinceDate: string | null = null;
+
+  if (allWeekSummaries.length > 0) {
+    // Most recent summary — entries are stored newest-first so we need the max weekEnd
+    const lastSummary = allWeekSummaries.reduce((a, b) =>
+      a.weekEnd > b.weekEnd ? a : b
+    );
+    sinceDate = lastSummary.weekEnd;
+  }
+
+  const filtered = sinceDate
+    ? allEntries.filter((e) => toDateStr(e.createdAt) > sinceDate!)
+    : allEntries;
+
+  // Count distinct days
+  const distinctDays = new Set(filtered.map((e) => toDateStr(e.createdAt)));
+  const hasEnough = distinctDays.size >= 5;
+
+  return { entries: filtered, sinceDate, hasEnough };
+}
+
+// Group entries by date for display — days newest first, entries newest first within day
 export function groupEntriesByDate(
   allEntries: JournalEntry[],
-  allDaySummaries: DaySummary[]
-): Map<string, { entries: JournalEntry[]; summary: DaySummary | null }> {
-  const map = new Map<string, { entries: JournalEntry[]; summary: DaySummary | null }>();
+  allDaySummaries: DaySummary[],
+  allWeekSummaries: WeekSummary[]
+): Map<string, { entries: JournalEntry[]; daySummary: DaySummary | null; weekSummaryAfter: WeekSummary | null }> {
+  const map = new Map<string, { entries: JournalEntry[]; daySummary: DaySummary | null; weekSummaryAfter: WeekSummary | null }>();
 
+  // Entries already newest-first from Firestore query
   for (const entry of allEntries) {
     const dateStr = toDateStr(entry.createdAt);
-    if (!map.has(dateStr)) map.set(dateStr, { entries: [], summary: null });
+    if (!map.has(dateStr)) map.set(dateStr, { entries: [], daySummary: null, weekSummaryAfter: null });
     map.get(dateStr)!.entries.push(entry);
   }
 
   for (const summary of allDaySummaries) {
-    if (!map.has(summary.date)) map.set(summary.date, { entries: [], summary: null });
-    map.get(summary.date)!.summary = summary;
+    if (!map.has(summary.date)) map.set(summary.date, { entries: [], daySummary: null, weekSummaryAfter: null });
+    map.get(summary.date)!.daySummary = summary;
   }
 
-  // Sort by date descending for display
+  // Attach each week summary to the day matching its weekEnd date
+  for (const ws of allWeekSummaries) {
+    const targetDate = ws.weekEnd;
+    if (!map.has(targetDate)) map.set(targetDate, { entries: [], daySummary: null, weekSummaryAfter: null });
+    map.get(targetDate)!.weekSummaryAfter = ws;
+  }
+
+  // Sort by date descending
   return new Map([...map.entries()].sort((a, b) => b[0].localeCompare(a[0])));
 }

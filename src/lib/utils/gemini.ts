@@ -61,8 +61,8 @@ Tone: warm, calm, like a thoughtful friend who genuinely gets it. Do NOT suggest
 }
 
 export async function generateWeekSummary(
-  weekStartStr: string,
-  weekEndStr: string,
+  sinceDate: string | null,
+  untilDate: string,
   entriesByDay: { date: string; entries: string[] }[]
 ): Promise<string> {
   const fmtDate = (s: string) =>
@@ -72,17 +72,21 @@ export async function generateWeekSummary(
       month: 'long',
     });
 
+  const periodLabel = sinceDate
+    ? `${fmtDate(sinceDate)} to ${fmtDate(untilDate)}`
+    : `up to ${fmtDate(untilDate)}`;
+
   const weekText = entriesByDay
     .map(({ date, entries }) => `${fmtDate(date)}:\n${entries.map((e) => `  - ${e}`).join('\n')}`)
     .join('\n\n');
 
   const prompt = `You are a warm, calm journal assistant for a stay-at-home parent running a busy neurodivergent household with two young children (ages around 3 and 5). Your role is to witness and validate — not to advise or reframe.
 
-Here is the journal for the week of ${fmtDate(weekStartStr)} to ${fmtDate(weekEndStr)}:
+Here is the journal for the period ${periodLabel}:
 
 ${weekText}
 
-Write a weekly summary (4–6 sentences). Group and name the categories of work done across the week — for example: childcare, food sourcing, household admin, logistics, activities, emotional labour. Be specific where the entries allow. Close with a clear, warm statement that validates why free time was limited or absent this week — not as a problem to solve, but as an honest acknowledgement of how full it was.
+Write a summary (4–6 sentences). Group and name the categories of work done across this period — for example: childcare, food sourcing, household admin, logistics, activities, emotional labour. Be specific where the entries allow. Close with a clear, warm statement that validates why free time was limited or absent — not as a problem to solve, but as an honest acknowledgement of how full this period was.
 
 Tone: warm, calm, matter-of-fact. Like a thoughtful friend who sees all the invisible work. Do NOT suggest improvements, add self-care reminders, or minimise anything.`;
 

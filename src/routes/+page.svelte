@@ -5,14 +5,11 @@
     daySummaries,
     weekSummaries,
     journalLoading,
-    journalError,
-    summaryLoading,
     addEntry,
     saveDaySummary,
     saveWeekSummary,
     groupEntriesByDate,
-    getEntriesForCurrentWeek,
-    getCurrentWeekRange,
+    getEntriesSinceLastSummary,
     toDateStr,
     formatDisplayDate,
     formatTime,
@@ -26,24 +23,12 @@
   let errorMsg = '';
   let view: 'write' | 'history' = 'write';
 
-  // Today's date string
   $: todayStr = toDateStr(new Date());
-
-  // Grouped entries for history view
-  $: groupedDays = groupEntriesByDate($entries, $daySummaries);
-
-  // Today's entries
   $: todayEntries = $entries.filter((e) => toDateStr(e.createdAt) === todayStr);
-
-  // Today's summary if it exists
   $: todaySummary = $daySummaries.find((s) => s.date === todayStr) ?? null;
-
-  // Current week summary
-  $: {
-    const { startStr } = getCurrentWeekRange();
-    currentWeekSummary = $weekSummaries.find((s) => s.weekStart === startStr) ?? null;
-  }
-  let currentWeekSummary: (typeof $weekSummaries)[0] | null = null;
+  $: sinceLastSummary = getEntriesSinceLastSummary($entries, $weekSummaries);
+  $: showWeekSummaryButton = sinceLastSummary.hasEnough;
+  $: groupedDays = groupEntriesByDate($entries, $daySummaries, $weekSummaries);
 
   async function handleAddEntry() {
     if (!entryText.trim() || !$user) return;
@@ -52,7 +37,7 @@
     try {
       await addEntry($user, entryText.trim());
       entryText = '';
-    } catch (e) {
+    } catch {
       errorMsg = 'Failed to save entry. Please try again.';
     } finally {
       submitting = false;
@@ -64,12 +49,10 @@
     endOfDayLoading = true;
     errorMsg = '';
     try {
-      const summary = await generateDaySummary(
-        todayStr,
-        todayEntries.map((e) => e.text)
-      );
+      const ordered = [...todayEntries].reverse();
+      const summary = await generateDaySummary(todayStr, ordered.map((e) => e.text));
       await saveDaySummary($user, todayStr, summary);
-    } catch (e) {
+    } catch {
       errorMsg = 'Failed to generate summary. Check your Gemini API key.';
     } finally {
       endOfDayLoading = false;
@@ -81,18 +64,17 @@
     weekSummaryLoading = true;
     errorMsg = '';
     try {
-      const { startStr, endStr, start, end } = getCurrentWeekRange();
-      const weekEntries = $entries.filter((e) => e.createdAt >= start && e.createdAt <= end);
+      const { entries: periodEntries, sinceDate } = sinceLastSummary;
+      const untilDate = todayStr;
 
-      if (weekEntries.length === 0) {
-        errorMsg = 'No entries found for this week yet.';
+      if (periodEntries.length === 0) {
+        errorMsg = 'No entries found to summarise.';
         weekSummaryLoading = false;
         return;
       }
 
-      // Group by day
       const byDay = new Map<string, string[]>();
-      for (const e of weekEntries) {
+      for (const e of [...periodEntries].reverse()) {
         const d = toDateStr(e.createdAt);
         if (!byDay.has(d)) byDay.set(d, []);
         byDay.get(d)!.push(e.text);
@@ -100,12 +82,13 @@
 
       const entriesByDay = [...byDay.entries()]
         .sort(([a], [b]) => a.localeCompare(b))
-        .map(([date, entries]) => ({ date, entries }));
+        .map(([date, entryTexts]) => ({ date, entries: entryTexts }));
 
-      const summary = await generateWeekSummary(startStr, endStr, entriesByDay);
-      await saveWeekSummary($user, startStr, endStr, summary);
-    } catch (e) {
-      errorMsg = 'Failed to generate weekly summary. Check your Gemini API key.';
+      const summary = await generateWeekSummary(sinceDate, untilDate, entriesByDay);
+      const weekStart = sinceDate ?? toDateStr(periodEntries[periodEntries.length - 1].createdAt);
+      await saveWeekSummary($user, weekStart, untilDate, summary);
+    } catch {
+      errorMsg = 'Failed to generate summary. Check your Gemini API key.';
     } finally {
       weekSummaryLoading = false;
     }
@@ -119,20 +102,16 @@
 </script>
 
 {#if $authLoading}
-  <!-- Loading splash -->
   <div class="min-h-screen bg-stone-50 flex items-center justify-center">
     <div class="text-stone-400 font-sans text-sm animate-pulse">Loading…</div>
   </div>
 
 {:else if !$user}
-  <!-- Sign in screen -->
   <div class="min-h-screen bg-stone-50 flex flex-col items-center justify-center px-6">
     <div class="max-w-sm w-full text-center space-y-8">
       <div class="space-y-2">
         <h1 class="text-3xl font-medium text-stone-800 italic">Journal</h1>
-        <p class="text-stone-500 font-sans text-sm leading-relaxed">
-          A quiet place to note your day.
-        </p>
+        <p class="text-stone-500 font-sans text-sm leading-relaxed">A quiet place to note your day.</p>
       </div>
 
       {#if $authError}
@@ -157,10 +136,8 @@
   </div>
 
 {:else}
-  <!-- Main app -->
   <div class="min-h-screen bg-stone-50 flex flex-col max-w-lg mx-auto">
 
-    <!-- Header -->
     <header class="px-5 pt-8 pb-4 flex items-start justify-between">
       <div>
         <h1 class="text-2xl font-medium text-stone-800 italic">Journal</h1>
@@ -171,29 +148,23 @@
       <button on:click={signOut} class="btn-ghost mt-1">Sign out</button>
     </header>
 
-    <!-- Tab bar -->
     <div class="px-5 mb-4 flex gap-2">
       <button
         on:click={() => (view = 'write')}
         class="font-sans text-sm px-4 py-1.5 rounded-full transition-colors
                {view === 'write' ? 'bg-stone-800 text-white' : 'text-stone-500 hover:text-stone-700'}"
-      >
-        Today
-      </button>
+      >Today</button>
       <button
         on:click={() => (view = 'history')}
         class="font-sans text-sm px-4 py-1.5 rounded-full transition-colors
                {view === 'history' ? 'bg-stone-800 text-white' : 'text-stone-500 hover:text-stone-700'}"
-      >
-        History
-      </button>
+      >History</button>
     </div>
 
     <main class="flex-1 px-5 pb-10 space-y-4">
 
       {#if view === 'write'}
 
-        <!-- Entry input -->
         <div class="card p-4 space-y-3">
           <textarea
             bind:value={entryText}
@@ -209,24 +180,46 @@
               on:click={handleAddEntry}
               disabled={!entryText.trim() || submitting}
               class="btn-primary"
-            >
-              {submitting ? 'Saving…' : 'Save'}
-            </button>
+            >{submitting ? 'Saving…' : 'Save'}</button>
           </div>
         </div>
 
         {#if errorMsg}
-          <p class="font-sans text-sm text-red-500 bg-red-50 rounded-xl px-4 py-3 animate-fade-in">
-            {errorMsg}
-          </p>
+          <p class="font-sans text-sm text-red-500 bg-red-50 rounded-xl px-4 py-3 animate-fade-in">{errorMsg}</p>
         {/if}
 
-        <!-- Today's entries -->
         {#if $journalLoading}
           <p class="font-sans text-sm text-stone-400 text-center py-4 animate-pulse">Loading…</p>
-        {:else if $journalError}
-          <p class="font-sans text-sm text-red-500 bg-red-50 rounded-xl px-4 py-3">{$journalError}</p>
         {:else if todayEntries.length > 0}
+
+          <!-- End of day summary sits at the top of the day's entries -->
+          {#if todaySummary}
+            <div class="bg-sage-50 border border-sage-200 rounded-2xl px-4 py-3 animate-fade-in">
+              <p class="font-mono text-xs text-sage-500 mb-2 uppercase tracking-wider">End of day</p>
+              <p class="text-stone-700 font-sans text-sm leading-relaxed italic">{todaySummary.summary}</p>
+            </div>
+          {/if}
+
+          <!-- Action buttons -->
+          <div class="flex gap-2">
+            {#if !todaySummary}
+              <button
+                on:click={handleEndOfDay}
+                disabled={endOfDayLoading}
+                class="btn-secondary flex-1"
+              >{endOfDayLoading ? 'Reflecting…' : 'End of day'}</button>
+            {/if}
+
+            {#if showWeekSummaryButton}
+              <button
+                on:click={handleWeekSummary}
+                disabled={weekSummaryLoading}
+                class="btn-secondary flex-1"
+              >{weekSummaryLoading ? 'Reflecting…' : 'Summarise period'}</button>
+            {/if}
+          </div>
+
+          <!-- Entries — newest first -->
           <div class="space-y-2">
             {#each todayEntries as entry (entry.id)}
               <div class="card px-4 py-3 animate-slide-up">
@@ -236,22 +229,6 @@
             {/each}
           </div>
 
-          <!-- Today's summary -->
-          {#if todaySummary}
-            <div class="summary-card animate-fade-in">
-              <p class="font-mono text-xs text-sage-500 mb-2 uppercase tracking-wider">End of day</p>
-              <p class="text-stone-700 font-sans text-sm leading-relaxed italic">{todaySummary.summary}</p>
-            </div>
-          {:else}
-            <button
-              on:click={handleEndOfDay}
-              disabled={endOfDayLoading}
-              class="btn-secondary w-full"
-            >
-              {endOfDayLoading ? 'Reflecting…' : 'End of day'}
-            </button>
-          {/if}
-
         {:else}
           <div class="text-center py-10 space-y-1">
             <p class="text-stone-400 font-sans text-sm">Nothing logged yet today.</p>
@@ -259,51 +236,32 @@
           </div>
         {/if}
 
-        <!-- Weekly summary section -->
-        <div class="pt-2 border-t border-stone-100 space-y-3">
-          <p class="font-mono text-xs text-stone-400 uppercase tracking-wider">This week</p>
-
-          {#if currentWeekSummary}
-            <div class="summary-card animate-fade-in">
-              <p class="font-mono text-xs text-sage-500 mb-2 uppercase tracking-wider">Weekly summary</p>
-              <p class="text-stone-700 font-sans text-sm leading-relaxed italic">{currentWeekSummary.summary}</p>
-            </div>
-            <button
-              on:click={handleWeekSummary}
-              disabled={weekSummaryLoading}
-              class="btn-ghost w-full text-center"
-            >
-              {weekSummaryLoading ? 'Reflecting…' : 'Regenerate summary'}
-            </button>
-          {:else}
-            <button
-              on:click={handleWeekSummary}
-              disabled={weekSummaryLoading}
-              class="btn-secondary w-full"
-            >
-              {weekSummaryLoading ? 'Reflecting on your week…' : 'Summarise my week'}
-            </button>
-          {/if}
-        </div>
-
       {:else}
-        <!-- History view -->
+        <!-- History -->
         {#if $journalLoading}
           <p class="font-sans text-sm text-stone-400 text-center py-8 animate-pulse">Loading…</p>
-        {:else if $journalError}
-          <p class="font-sans text-sm text-red-500 bg-red-50 rounded-xl px-4 py-3">{$journalError}</p>
         {:else if groupedDays.size === 0}
           <div class="text-center py-10">
             <p class="text-stone-400 font-sans text-sm">No entries yet.</p>
           </div>
         {:else}
-          <div class="space-y-6">
-            {#each [...groupedDays.entries()] as [dateStr, { entries: dayEntries, summary }] (dateStr)}
+          <div class="space-y-8">
+            {#each [...groupedDays.entries()] as [dateStr, { entries: dayEntries, daySummary, weekSummaryAfter }] (dateStr)}
               <div class="space-y-2 animate-fade-in">
-                <h2 class="font-mono text-xs text-stone-400 uppercase tracking-wider">
+
+                <h2 class="font-mono text-xs text-stone-400 uppercase tracking-wider pb-1">
                   {formatDisplayDate(dateStr)}
                 </h2>
 
+                <!-- Day summary at top of day group -->
+                {#if daySummary}
+                  <div class="bg-sage-50 border border-sage-200 rounded-2xl px-4 py-3">
+                    <p class="font-mono text-xs text-sage-500 mb-1.5 uppercase tracking-wider">End of day</p>
+                    <p class="text-stone-700 font-sans text-sm leading-relaxed italic">{daySummary.summary}</p>
+                  </div>
+                {/if}
+
+                <!-- Entries newest first -->
                 {#each dayEntries as entry (entry.id)}
                   <div class="card px-4 py-3">
                     <p class="text-stone-700 font-sans text-sm leading-relaxed">{entry.text}</p>
@@ -311,12 +269,14 @@
                   </div>
                 {/each}
 
-                {#if summary}
-                  <div class="summary-card">
-                    <p class="font-mono text-xs text-sage-500 mb-1.5 uppercase tracking-wider">End of day</p>
-                    <p class="text-stone-700 font-sans text-sm leading-relaxed italic">{summary.summary}</p>
+                <!-- Period summary anchored to the last day it covers -->
+                {#if weekSummaryAfter}
+                  <div class="bg-warm-50 border border-warm-200 rounded-2xl px-4 py-3">
+                    <p class="font-mono text-xs text-warm-500 mb-1.5 uppercase tracking-wider">Period summary</p>
+                    <p class="text-stone-700 font-sans text-sm leading-relaxed italic">{weekSummaryAfter.summary}</p>
                   </div>
                 {/if}
+
               </div>
             {/each}
           </div>
