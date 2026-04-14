@@ -20,8 +20,10 @@
   let submitting = false;
   let endOfDayLoading = false;
   let weekSummaryLoading = false;
+  let autoSummaryBackfillLoading = false;
   let errorMsg = '';
   let view: 'write' | 'history' = 'write';
+  const autoSummaryAttemptedDates = new Set<string>();
 
   $: todayStr = toDateStr(new Date());
   $: todayEntries = $entries.filter((e) => toDateStr(e.createdAt) === todayStr);
@@ -29,6 +31,9 @@
   $: sinceLastSummary = getEntriesSinceLastSummary($entries, $weekSummaries);
   $: showWeekSummaryButton = sinceLastSummary.hasEnough;
   $: groupedDays = groupEntriesByDate($entries, $daySummaries, $weekSummaries);
+  $: if ($user && !$journalLoading) {
+    void ensureHistoricalDaySummaries();
+  }
 
   async function handleAddEntry() {
     if (!entryText.trim() || !$user) return;
@@ -93,6 +98,39 @@
         e instanceof Error ? e.message : 'Failed to generate summary. Please try again.';
     } finally {
       weekSummaryLoading = false;
+    }
+  }
+
+  async function ensureHistoricalDaySummaries() {
+    if (!$user || autoSummaryBackfillLoading) return;
+
+    const missingDates = [...groupedDays.entries()]
+      .filter(([dateStr, { entries: dayEntries, daySummary }]) =>
+        dateStr < todayStr &&
+        dayEntries.length > 0 &&
+        !daySummary &&
+        !autoSummaryAttemptedDates.has(dateStr)
+      )
+      .map(([dateStr]) => dateStr)
+      .sort((a, b) => a.localeCompare(b));
+
+    if (missingDates.length === 0) return;
+
+    autoSummaryBackfillLoading = true;
+    try {
+      for (const dateStr of missingDates) {
+        autoSummaryAttemptedDates.add(dateStr);
+        const dayEntries = groupedDays.get(dateStr)?.entries ?? [];
+        if (dayEntries.length === 0) continue;
+        const ordered = [...dayEntries].reverse();
+        const summary = await generateDaySummary(dateStr, ordered.map((e) => e.text));
+        await saveDaySummary($user, dateStr, summary);
+      }
+    } catch (e) {
+      errorMsg =
+        e instanceof Error ? e.message : 'Failed to generate summary. Please try again.';
+    } finally {
+      autoSummaryBackfillLoading = false;
     }
   }
 
