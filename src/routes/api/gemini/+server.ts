@@ -3,7 +3,8 @@ import type { RequestHandler } from './$types';
 import { env } from '$env/dynamic/private';
 
 const GEMINI_API_URL = 
-  'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent';
+  'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite-preview:generateContent';
+  
 
 function getApiKey(): string {
   const key = (env.GEMINI_API_KEY ?? env.VITE_GEMINI_API_KEY ?? '').trim();
