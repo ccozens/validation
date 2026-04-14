@@ -52,8 +52,9 @@
       const ordered = [...todayEntries].reverse();
       const summary = await generateDaySummary(todayStr, ordered.map((e) => e.text));
       await saveDaySummary($user, todayStr, summary);
-    } catch {
-      errorMsg = 'Failed to generate summary. Check your Gemini API key.';
+    } catch (e) {
+      errorMsg =
+        e instanceof Error ? e.message : 'Failed to generate summary. Please try again.';
     } finally {
       endOfDayLoading = false;
     }
@@ -87,8 +88,9 @@
       const summary = await generateWeekSummary(sinceDate, untilDate, entriesByDay);
       const weekStart = sinceDate ?? toDateStr(periodEntries[periodEntries.length - 1].createdAt);
       await saveWeekSummary($user, weekStart, untilDate, summary);
-    } catch {
-      errorMsg = 'Failed to generate summary. Check your Gemini API key.';
+    } catch (e) {
+      errorMsg =
+        e instanceof Error ? e.message : 'Failed to generate summary. Please try again.';
     } finally {
       weekSummaryLoading = false;
     }

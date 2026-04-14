@@ -1,35 +1,27 @@
 // src/lib/utils/gemini.ts
-
-const GEMINI_API_URL =
-  'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent';
-
-function getApiKey(): string {
-  const key = import.meta.env.VITE_GEMINI_API_KEY;
-  if (!key) throw new Error('Gemini API key not set. Add VITE_GEMINI_API_KEY to your .env file.');
-  return key;
-}
+// Calls Gemini via /api/gemini so the key stays on the server and browser CORS does not apply.
 
 async function callGemini(prompt: string): Promise<string> {
-  const apiKey = getApiKey();
-  const res = await fetch(`${GEMINI_API_URL}?key=${apiKey}`, {
+  const res = await fetch('/api/gemini', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      contents: [{ parts: [{ text: prompt }] }],
-      generationConfig: {
-        temperature: 0.7,
-        maxOutputTokens: 600,
-      },
-    }),
+    body: JSON.stringify({ prompt }),
   });
 
+  const errBody = await res.text();
   if (!res.ok) {
-    const err = await res.text();
-    throw new Error(`Gemini API error: ${err}`);
+    let message = `Request failed (${res.status})`;
+    try {
+      const parsed = JSON.parse(errBody) as { message?: string };
+      if (typeof parsed.message === 'string') message = parsed.message;
+    } catch {
+      if (errBody) message = errBody.slice(0, 500);
+    }
+    throw new Error(message);
   }
 
-  const data = await res.json();
-  return data.candidates?.[0]?.content?.parts?.[0]?.text ?? 'No response generated.';
+  const data = JSON.parse(errBody) as { text?: string };
+  return data.text ?? 'No response generated.';
 }
 
 export async function generateDaySummary(
